@@ -147,13 +147,14 @@ const CATS=[['💻','ওয়েব ডেভেলপমেন্ট'],['🎨'
 const icon=c=>(CATS.find(x=>x[1]===c)||['🧩'])[0];
 const ST={pending_payment:['পেমেন্টের অপেক্ষায়','g'],payment_submitted:['পেমেন্ট যাচাই চলছে','b'],in_progress:['কাজ চলছে','m'],delivered:['ডেলিভারি দেওয়া হয়েছে','b'],completed:['সম্পন্ন','o'],disputed:['সমস্যা/বিরোধ','r'],cancelled:['বাতিল','r']};
 const FLOW=['pending_payment','payment_submitted','in_progress','delivered','completed'];
-let CFG={feePct:10,minFee:20,nagad:'',whatsapp:''},ME=null,PROFILE=null,ISADMIN=false,unsub=[];
+let CFG={feePct:10,minFee:20,nagad:'',whatsapp:'',refPct:20,minWithdraw:200},ME=null,PROFILE=null,ISADMIN=false,unsub=[];
 const feeOf=p=>Math.max(Math.round(p*CFG.feePct/100),Math.min(CFG.minFee,p));
 const errMap=c=>({'auth/invalid-credential':'ইমেইল বা পাসওয়ার্ড ভুল','auth/wrong-password':'পাসওয়ার্ড ভুল','auth/user-not-found':'এই ইমেইলে একাউন্ট নেই','auth/email-already-in-use':'এই ইমেইলে আগেই একাউন্ট খোলা হয়েছে','auth/weak-password':'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের দিন','auth/invalid-email':'ইমেইল সঠিক নয়','auth/network-request-failed':'ইন্টারনেট সংযোগ চেক করুন','auth/api-key-not-valid.-please-pass-a-valid-api-key.':'কনফিগে API key ভুল আছে','auth/invalid-api-key':'কনফিগে API key ভুল আছে','permission-denied':'অনুমতি নেই (সিকিউরিটি রুলস চেক করুন)'}[c]||('সমস্যা হয়েছে: '+c));
 const dget=async(p,id)=>{const s=await getDoc(doc(db,p,id));return s.exists()?{id:s.id,...s.data()}:null};
 const dlist=async q=>(await getDocs(q)).docs.map(d=>({id:d.id,...d.data()}));
 const clean=()=>{unsub.forEach(f=>f());unsub=[]};
 const go=h=>{location.hash=h};
+try{const q=new URLSearchParams(location.search).get('ref')||(location.hash.split('ref=')[1]||'').split('&')[0];if(q)localStorage.setItem('tw_ref',q)}catch(e){}
 const needLogin=()=>{if(!ME){toast('আগে লগইন করুন');go('#/login');return true}if(PROFILE&&PROFILE.blocked){toast('আপনার একাউন্ট স্থগিত');return true}return false};
 
 /* ---- chrome ---- */
@@ -163,7 +164,7 @@ function chrome(){
   const on=a=>a==='#/'?h==='#/':h.startsWith(a);
   $('#nav').innerHTML=items.slice(0,4).map(i=>`<a href="${i[0]}" class="${on(i[0])?'on':''}">${i[2]}</a>`).join('')+(ISADMIN?`<a href="#/admin" class="${on('#/admin')?'on':''}">অ্যাডমিন</a>`:'');
   $('#bn').innerHTML=items.map(i=>`<a href="${i[0]}" class="${on(i[0])?'on':''}"><span>${i[1]}</span>${i[2]}</a>`).join('');
-  $('#hAuth').innerHTML=ME?`<a href="#/profile" class="av" title="${esc(ME.displayName||'')}">${esc((ME.displayName||'U')[0])}</a>`:`<a href="#/login" class="btn sm">লগইন</a>`;
+  $('#hAuth').innerHTML=ME?`<span style="display:flex;align-items:center;gap:8px"><a href="#/wallet" class="btn sm ghost">ওয়ালেট</a><a href="#/profile" class="av" title="${esc(ME.displayName||'')}">${esc((ME.displayName||'U')[0])}</a></span>`:`<a href="#/login" class="btn sm">লগইন</a>`;
 }
 
 /* ---- views ---- */
@@ -286,7 +287,8 @@ function vLogin(){
         if(mode==='in')await signInWithEmailAndPassword(auth,e,p);
         else{const n=$('#n').value.trim();if(n.length<2){$('#go').disabled=false;return er('নাম লিখুন')}
           const c=await createUserWithEmailAndPassword(auth,e,p);await updateProfile(c.user,{displayName:n});
-          await setDoc(doc(db,'users',c.user.uid),{name:n,role,bio:'',skills:'',ts:Date.now()});ME={uid:c.user.uid,displayName:n};}
+          let refBy='';try{const r=localStorage.getItem('tw_ref');if(r&&r!==c.user.uid){const ru=await dget('users',r);if(ru)refBy=r}}catch(e){}
+          await setDoc(doc(db,'users',c.user.uid),{name:n,role,bio:'',skills:'',ts:Date.now(),...(refBy?{refBy}:{})});ME={uid:c.user.uid,displayName:n};}
         go('#/');
       }catch(x){$('#go').disabled=false;er(errMap(x.code||x.message))}
     };
@@ -363,7 +365,7 @@ async function vOrder(id){
   document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{if(['cancelled','disputed','completed'].includes(b.dataset.s)&&!confirm('নিশ্চিত?'))return;upd({status:b.dataset.s})});
   $('#pay')&&($('#pay').onclick=()=>{const t=$('#trx').value.trim();if(t.length<6)return toast('TrxID লিখুন');upd({status:'payment_submitted',trx:t})});
   $('#dv')&&($('#dv').onclick=()=>{const t=$('#dl').value.trim();if(t.length<5)return toast('ডেলিভারির বিবরণ লিখুন');upd({status:'delivered',delivery:t})});
-  $('#po')&&($('#po').onclick=()=>{const t=$('#ptx').value.trim();if(!t)return toast('TrxID লিখুন');upd({paidOut:true,payoutTrx:t})});
+  $('#po')&&($('#po').onclick=async()=>{const t=$('#ptx').value.trim();if(!t)return toast('TrxID লিখুন');try{await grantRef(o)}catch(e){toast('রেফারেল বোনাস দিতে সমস্যা: '+errMap(e.code));return}upd({paidOut:true,payoutTrx:t})});
   const chat=$('#chat');
   unsub.push(onSnapshot(query(collection(db,'orders',id,'messages'),orderBy('ts')),s=>{chat.innerHTML=s.docs.map(d=>d.data()).map(m=>`<div class="msg ${m.senderId===ME.uid?'me':''}"><small>${esc(m.senderName)} · ${ago(m.ts)}</small>${esc(m.text)}</div>`).join('')||'<div class="empty" style="padding:14px">এখনো কোনো মেসেজ নেই</div>';chat.scrollTop=chat.scrollHeight},()=>{}));
   const send=async()=>{const t=$('#mt').value.trim();if(!t)return;$('#mt').value='';try{await addDoc(collection(db,'orders',id,'messages'),{text:t.slice(0,1000),senderId:ME.uid,senderName:ME.displayName||'ব্যবহারকারী',ts:Date.now()})}catch(e){toast(errMap(e.code))}};
@@ -382,9 +384,9 @@ async function vProfile(){
   <label class="f">দক্ষতা (কমা দিয়ে লিখুন)<input class="in" id="k" value="${esc(p.skills||'')}" placeholder="লোগো ডিজাইন, ভিডিও এডিটিং"></label>
   <label class="f">নগদ নম্বর (ইনকামের টাকা পেতে, শুধু অ্যাডমিন দেখবে)<input class="in" id="g" inputmode="numeric" value="${esc(pr.nagad||'')}" placeholder="01XXXXXXXXX"></label>
   <button class="btn block" id="sv">সংরক্ষণ করুন</button></div>
-  <div class="row3"><a class="btn ghost" href="#/post-job">+ কাজ পোস্ট</a><a class="btn ghost" href="#/post-gig">+ সার্ভিস যোগ</a>${ISADMIN?'<a class="btn ghost" href="#/admin">অ্যাডমিন</a>':''}<button class="btn red" id="lo">লগআউট</button></div>`);
+  <div class="row3"><a class="btn" href="#/wallet">💰 ওয়ালেট ও রেফারেল</a><a class="btn ghost" href="#/post-job">+ কাজ পোস্ট</a><a class="btn ghost" href="#/post-gig">+ সার্ভিস যোগ</a>${ISADMIN?'<a class="btn ghost" href="#/admin">অ্যাডমিন</a>':''}<button class="btn red" id="lo">লগআউট</button></div>`);
   $('#sv').onclick=async()=>{const n=$('#n').value.trim();if(n.length<2)return toast('নাম লিখুন');const g=$('#g').value.trim();if(g&&!/^01\d{9}$/.test(g))return toast('নগদ নম্বর সঠিক নয়');
-    try{await updateProfile(auth.currentUser,{displayName:n});await setDoc(doc(db,'users',ME.uid),{name:n,role:$('#r').value,bio:$('#b').value.trim(),skills:$('#k').value.trim(),ts:p.ts||Date.now(),...(p.blocked?{blocked:true}:{})});await setDoc(doc(db,'private',ME.uid),{nagad:g});ME.displayName=n;toast('সংরক্ষিত ✓');chrome()}catch(e){toast(errMap(e.code))}};
+    try{await updateProfile(auth.currentUser,{displayName:n});await setDoc(doc(db,'users',ME.uid),{name:n,role:$('#r').value,bio:$('#b').value.trim(),skills:$('#k').value.trim(),ts:p.ts||Date.now(),...(p.blocked?{blocked:true}:{}),...(p.refBy?{refBy:p.refBy}:{})});await setDoc(doc(db,'private',ME.uid),{nagad:g});ME.displayName=n;toast('সংরক্ষিত ✓');chrome()}catch(e){toast(errMap(e.code))}};
   $('#lo').onclick=async()=>{await signOut(auth);go('#/')};
 }
 async function vUser(id){
@@ -398,19 +400,65 @@ async function vUser(id){
 async function vAdmin(){
   if(!ISADMIN)return view('<div class="empty"><div class="e">🔒</div>শুধু অ্যাডমিনের জন্য</div>');
   spin();let tab=location.hash.split('?t=')[1]||'orders';
-  const [orders,users]=await Promise.all([dlist(query(collection(db,'orders'),orderBy('ts','desc'),limit(100))),dlist(query(collection(db,'users'),orderBy('ts','desc'),limit(200)))]);
+  const [orders,users,wds,ears]=await Promise.all([dlist(query(collection(db,'orders'),orderBy('ts','desc'),limit(100))),dlist(query(collection(db,'users'),orderBy('ts','desc'),limit(200))),dlist(query(collection(db,'withdrawals'),orderBy('ts','desc'),limit(100))),dlist(query(collection(db,'earnings'),orderBy('ts','desc'),limit(1000)))]);
+  const balOf=u=>ears.filter(x=>x.uid===u).reduce((a,x)=>a+x.amount,0)-wds.filter(w=>w.uid===u&&w.status!=='rejected').reduce((a,w)=>a+w.amount,0);
   const todo=orders.filter(o=>o.status==='payment_submitted'||o.status==='disputed'||(o.status==='completed'&&!o.paidOut));
+  const pw=wds.filter(w=>w.status==='pending');
   const draw=()=>{
     $('#ab').innerHTML=tab==='orders'?`<div class="list">${orders.length?orders.map(o=>`<a class="job" href="#/order/${o.id}"><div class="meta"><span class="pill ${ST[o.status][1]}">${ST[o.status][0]}</span>${o.status==='completed'&&!o.paidOut?'<span class="pill r">পেআউট বাকি</span>':''}<span>${ago(o.ts)}</span></div><h3>${esc(o.title)}</h3><div class="meta"><span class="price">${tk(o.price)}</span><span>ফি ${tk(o.fee)}</span><span>${esc(o.clientName)} → ${esc(o.freelancerName)}</span></div></a>`).join(''):'<div class="empty">কোনো অর্ডার নেই</div>'}</div>`
+    :tab==='wd'?`<div class="tbl">${wds.length?wds.map(w=>{const b=balOf(w.uid);return `<div class="box" style="margin:0"><div class="who" style="flex-wrap:wrap"><b style="color:var(--tx)">${esc(w.name)}</b><span class="price">${tk(w.amount)}</span><span class="pill ${WST[w.status][1]}">${WST[w.status][0]}</span><span>${ago(w.ts)}</span></div><div class="meta" style="margin:6px 0">নগদ: <b style="color:var(--tx)">${esc(w.nagad)}</b> · ${w.status==='pending'?(b>=0?'ব্যালেন্স ঠিক আছে ✅':'⚠️ ব্যালেন্সের বেশি চেয়েছে ('+tk(b)+')'):''}${w.trx?' · TrxID '+esc(w.trx):''}</div>${w.status==='pending'?`<div class="row3"><button class="btn mint sm" data-wp="${w.id}">পাঠিয়েছি</button><button class="btn red sm" data-wr="${w.id}">বাতিল</button></div>`:''}</div>`}).join(''):'<div class="empty">কোনো অনুরোধ নেই</div>'}</div>`
     :tab==='users'?`<div class="tbl">${users.map(u=>`<div class="box" style="margin:0"><div class="who"><span class="av">${esc((u.name||'U')[0])}</span><b style="color:var(--tx)">${esc(u.name)}</b><span class="pill">${u.role}</span>${u.blocked?'<span class="pill r">স্থগিত</span>':''}<button class="btn sm ${u.blocked?'mint':'red'}" style="margin-left:auto" data-b="${u.id}">${u.blocked?'চালু করুন':'স্থগিত করুন'}</button></div></div>`).join('')||'<div class="empty">কেউ নেই</div>'}</div>`
-    :`<div class="box"><h3>সেটিংস</h3><div class="two"><label class="f">কমিশন (%)<input class="in" id="fp" inputmode="numeric" value="${CFG.feePct}"></label><label class="f">সর্বনিম্ন ফি (৳)<input class="in" id="fm" inputmode="numeric" value="${CFG.minFee}"></label></div><label class="f">নগদ নম্বর (পেমেন্ট নেওয়ার)<input class="in" id="fn" value="${esc(CFG.nagad)}"></label><label class="f">WhatsApp (সাপোর্ট)<input class="in" id="fw" value="${esc(CFG.whatsapp)}"></label><button class="btn block" id="fs">সংরক্ষণ</button></div>`;
+    :`<div class="box"><h3>সেটিংস</h3><div class="two"><label class="f">কমিশন (%)<input class="in" id="fp" inputmode="numeric" value="${CFG.feePct}"></label><label class="f">সর্বনিম্ন ফি (৳)<input class="in" id="fm" inputmode="numeric" value="${CFG.minFee}"></label></div><div class="two"><label class="f">রেফারেল (% কমিশন থেকে)<input class="in" id="fr" inputmode="numeric" value="${CFG.refPct}"></label><label class="f">ন্যূনতম উইথড্র (৳)<input class="in" id="fx" inputmode="numeric" value="${CFG.minWithdraw}"></label></div><label class="f">নগদ নম্বর (পেমেন্ট নেওয়ার)<input class="in" id="fn" value="${esc(CFG.nagad)}"></label><label class="f">WhatsApp (সাপোর্ট)<input class="in" id="fw" value="${esc(CFG.whatsapp)}"></label><button class="btn block" id="fs">সংরক্ষণ</button></div>`;
     document.querySelectorAll('[data-b]').forEach(b=>b.onclick=async()=>{const u=users.find(x=>x.id===b.dataset.b);try{await updateDoc(doc(db,'users',u.id),{blocked:!u.blocked});u.blocked=!u.blocked;draw()}catch(e){toast(errMap(e.code))}});
-    $('#fs')&&($('#fs').onclick=async()=>{try{CFG={feePct:num($('#fp').value),minFee:num($('#fm').value),nagad:$('#fn').value.trim(),whatsapp:$('#fw').value.trim()};await setDoc(doc(db,'config','main'),CFG);toast('সংরক্ষিত ✓')}catch(e){toast(errMap(e.code))}});
+    $('#fs')&&($('#fs').onclick=async()=>{try{CFG={feePct:num($('#fp').value),minFee:num($('#fm').value),refPct:num($('#fr').value),minWithdraw:num($('#fx').value),nagad:$('#fn').value.trim(),whatsapp:$('#fw').value.trim()};await setDoc(doc(db,'config','main'),CFG);toast('সংরক্ষিত ✓')}catch(e){toast(errMap(e.code))}});
+    document.querySelectorAll('[data-wp]').forEach(b=>b.onclick=async()=>{const w=wds.find(x=>x.id===b.dataset.wp);const t=prompt('নগদে পাঠানোর TrxID লিখুন');if(!t)return;try{await updateDoc(doc(db,'withdrawals',w.id),{status:'paid',trx:t.trim(),paidAt:Date.now()});w.status='paid';w.trx=t.trim();draw()}catch(e){toast(errMap(e.code))}});
+    document.querySelectorAll('[data-wr]').forEach(b=>b.onclick=async()=>{const w=wds.find(x=>x.id===b.dataset.wr);if(!confirm('বাতিল করবেন?'))return;try{await updateDoc(doc(db,'withdrawals',w.id),{status:'rejected'});w.status='rejected';draw()}catch(e){toast(errMap(e.code))}});
     document.querySelectorAll('#at button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
   };
-  view(`<div class="sec"><h2>অ্যাডমিন প্যানেল</h2></div>${todo.length?`<div class="note w">⚡ আপনার কাজ বাকি: <b>${bn(todo.length)}টি</b> অর্ডার (পেমেন্ট যাচাই / বিরোধ / পেআউট)</div>`:''}
-  <div class="stats"></div><div class="tabs2" style="grid-template-columns:repeat(3,1fr)" id="at"><button data-t="orders">অর্ডার (${bn(orders.length)})</button><button data-t="users">ইউজার (${bn(users.length)})</button><button data-t="set">সেটিংস</button></div><div id="ab"></div>`);
+  view(`<div class="sec"><h2>অ্যাডমিন প্যানেল</h2></div>${todo.length||pw.length?`<div class="note w">⚡ আপনার কাজ বাকি: <b>${bn(todo.length)}টি</b> অর্ডার (পেমেন্ট যাচাই / বিরোধ / পেআউট)${pw.length?` · <b>${bn(pw.length)}টি</b> উইথড্র অনুরোধ`:''}</div>`:''}
+  <div class="stats"></div><div class="tabs2" style="grid-template-columns:repeat(4,1fr)" id="at"><button data-t="orders">অর্ডার (${bn(orders.length)})</button><button data-t="wd">উইথড্র${pw.length?' ('+bn(pw.length)+')':''}</button><button data-t="users">ইউজার</button><button data-t="set">সেটিংস</button></div><div id="ab"></div>`);
   $('#at').onclick=e=>{const b=e.target.closest('button');if(b){tab=b.dataset.t;draw()}};draw();
+}
+
+
+async function grantRef(o){
+  for(const [u,side] of [[o.clientId,'c'],[o.freelancerId,'f']]){
+    const x=await dget('users',u);if(!x||!x.refBy||x.refBy===u)continue;
+    const amt=Math.floor((o.fee||0)*(CFG.refPct||0)/100);if(amt<1)continue;
+    await setDoc(doc(db,'earnings',o.id+'_'+side),{uid:x.refBy,orderId:o.id,from:x.name||'',title:o.title,amount:amt,ts:Date.now()});
+  }
+}
+const WST={pending:['অপেক্ষমাণ','g'],paid:['পাঠানো হয়েছে','o'],rejected:['বাতিল','r']};
+async function vWallet(){
+  if(!ME)return go('#/login');spin();
+  const [er,wd,rf,ord,pr]=await Promise.all([
+    dlist(query(collection(db,'earnings'),where('uid','==',ME.uid))),
+    dlist(query(collection(db,'withdrawals'),where('uid','==',ME.uid))),
+    dlist(query(collection(db,'users'),where('refBy','==',ME.uid))),
+    dlist(query(collection(db,'orders'),where('freelancerId','==',ME.uid))),
+    dget('private',ME.uid)]);
+  er.sort((a,b)=>b.ts-a.ts);wd.sort((a,b)=>b.ts-a.ts);
+  const earned=er.reduce((a,x)=>a+x.amount,0),out=wd.filter(w=>w.status!=='rejected').reduce((a,x)=>a+x.amount,0),bal=earned-out;
+  const done=ord.filter(o=>o.status==='completed'),workNet=done.reduce((a,o)=>a+o.net,0),workPaid=done.filter(o=>o.paidOut).reduce((a,o)=>a+o.net,0);
+  const link=location.origin+location.pathname+'?ref='+ME.uid;
+  view(`<div class="sec"><h2>আমার ওয়ালেট</h2></div>
+  <div class="box" style="text-align:center;background:linear-gradient(160deg,rgba(232,185,74,.14),rgba(94,234,212,.06))"><div class="k" style="color:var(--mut)">উইথড্র করার মতো ব্যালেন্স</div><div class="price" style="font-size:42px;margin:4px 0">${tk(bal)}</div>
+  <div class="meta" style="justify-content:center">মোট রেফারেল আয় ${tk(earned)} · তোলা/অপেক্ষমাণ ${tk(out)}</div></div>
+  <div class="box"><h3>🔗 আপনার রেফার লিংক</h3><div class="note">আপনার লিংক দিয়ে কেউ একাউন্ট খুললে, সে (ক্লায়েন্ট বা ফ্রিল্যান্সার যেভাবেই হোক) যতগুলো কাজ সম্পন্ন করবে, প্রতিটাতেই আমাদের কমিশনের <b>${bn(CFG.refPct)}%</b> আপনি পাবেন।</div>
+  <input class="in" id="rl" readonly value="${esc(link)}"><div class="row3" style="margin-top:10px"><button class="btn sm" id="cp">লিংক কপি</button><button class="btn sm ghost" id="sh">শেয়ার করুন</button></div>
+  <p class="meta" style="margin-top:10px">আপনার রেফার করা মানুষ: <b style="color:var(--tx)">${bn(rf.length)} জন</b></p></div>
+  <div class="box"><h3>💸 টাকা তুলুন</h3>${pr&&pr.nagad?`<p class="meta" style="margin:0 0 10px">নগদ নম্বর: <b style="color:var(--tx)">${esc(pr.nagad)}</b> · ন্যূনতম ${tk(CFG.minWithdraw)}</p><div class="row3" style="flex-wrap:nowrap"><input class="in" id="wa" inputmode="numeric" placeholder="কত টাকা" style="flex:1"><button class="btn" id="wb">অনুরোধ করুন</button></div>`:`<div class="note w">আগে <a href="#/profile" style="color:var(--gold);text-decoration:underline">প্রোফাইলে</a> আপনার নগদ নম্বর দিন।</div>`}
+  <p class="hint" style="color:var(--mut);font-size:13px;margin:10px 0 0">অনুরোধ অ্যাডমিন যাচাই করে নগদে পাঠাবে। সাধারণত কিছু ঘণ্টা থেকে ১ দিন লাগে।</p></div>
+  ${wd.length?`<div class="box"><h3>উইথড্র ইতিহাস</h3><div class="tbl">${wd.map(w=>`<div class="who" style="justify-content:space-between"><span>${tk(w.amount)} · ${ago(w.ts)}</span><span class="pill ${WST[w.status][1]}">${WST[w.status][0]}</span></div>`).join('')}</div></div>`:''}
+  <div class="box"><h3>রেফারেল আয়ের তালিকা</h3>${er.length?`<div class="tbl">${er.map(x=>`<div class="who" style="justify-content:space-between"><span>${esc(x.from)} · ${esc(x.title)}</span><b style="color:var(--ok)">+${tk(x.amount)}</b></div>`).join('')}</div>`:'<div class="empty" style="padding:20px">এখনো কোনো আয় নেই। লিংক শেয়ার করুন!</div>'}</div>
+  ${ord.length?`<div class="box"><h3>আমার কাজের আয়</h3><div class="kv"><span>সম্পন্ন কাজ</span><b>${bn(done.length)}টি</b><span>মোট পাওনা (ফি কাটার পর)</span><b>${tk(workNet)}</b><span>পাঠানো হয়েছে</span><b style="color:var(--ok)">${tk(workPaid)}</b><span>বাকি</span><b class="price">${tk(workNet-workPaid)}</b></div></div>`:''}`);
+  $('#cp').onclick=async()=>{try{await navigator.clipboard.writeText(link);toast('লিংক কপি হয়েছে ✓')}catch(e){$('#rl').select();toast('লিংক সিলেক্ট হয়েছে, কপি করুন')}};
+  $('#sh').onclick=async()=>{try{if(navigator.share){await navigator.share({title:'TechCraft Work',text:'TechCraft Work-এ কাজ করুন বা কাজ দিন',url:link})}else{await navigator.clipboard.writeText(link);toast('লিংক কপি হয়েছে ✓')}}catch(e){}};
+  $('#wb')&&($('#wb').onclick=async()=>{
+    const a=num($('#wa').value);if(a<CFG.minWithdraw)return toast('ন্যূনতম '+tk(CFG.minWithdraw));if(a>bal)return toast('ব্যালেন্সের বেশি তোলা যাবে না');
+    if(!confirm(tk(a)+' তোলার অনুরোধ পাঠাবেন?'))return;$('#wb').disabled=true;
+    try{await addDoc(collection(db,'withdrawals'),{uid:ME.uid,name:ME.displayName||'',amount:a,nagad:pr.nagad,status:'pending',ts:Date.now()});toast('অনুরোধ পাঠানো হয়েছে ✓');vWallet()}catch(e){toast(errMap(e.code));$('#wb').disabled=false}
+  });
 }
 
 /* ---- router ---- */
@@ -430,6 +478,7 @@ async function route(){
     else if(seg[1]==='order')await vOrder(seg[2]);
     else if(p==='#/profile')await vProfile();
     else if(seg[1]==='u')await vUser(seg[2]);
+    else if(p==='#/wallet')await vWallet();
     else if(p==='#/admin')await vAdmin();
     else await vHome();
   }catch(e){console.error(e);view(`<div class="empty"><div class="e">⚠️</div><p>লোড করতে সমস্যা হয়েছে।</p><p style="font-size:13px">${esc(e.code||e.message)}</p><p style="font-size:13px;color:var(--mut)">${(e.code==='permission-denied')?'Firestore → Rules ট্যাবে রুলস পেস্ট করে Publish করেছেন কিনা দেখুন।':''}</p></div>`)}
